@@ -38,4 +38,8 @@ void* memreallocarray(void *ptr, size_t _nmemb, size_t _elem_size);
  */
 void memfree(void *ptr);
 
+size_t memalloc_get_n_mallocs(void);
+size_t memalloc_get_n_frees(void);
+size_t memalloc_get_currently_allocated_ptrs(void);
+
 #endif /* __MEMALLOC_H__ */

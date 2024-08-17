@@ -5,33 +5,39 @@
 #include <string.h>
 #include <threads.h>
 #include <time.h>
-#include "os.h"
-#include "debug.h"
 #include "memalloc.h"
 #include <limits.h>
-
-typedef unsigned char u8;
-#define offset(ptr, bytes) ((void*)((u8*)(ptr) + bytes))
+#include "def.h"
+#include "conf.h"
+#include "os.h"
 
 #define would_overflow(a,b) (a > SIZE_MAX / b)
 
-/* =================== CHUNK ========================== */
+static atomic_size_t n_mallocs = 0;
+static atomic_size_t n_frees = 0;
+
+/* ============== chunk ===================== */
 
 typedef struct chunk {
+#if MEMALLOC_PADDING
+        u8 __padding_top[MEMALLOC_PADDING];
+#endif
         size_t len;
-        u8 available;
         struct chunk *next, *prev;
+        u8 available;
+#if MEMALLOC_PADDING
+        u8 __padding_bottom[MEMALLOC_PADDING];
+#endif
 } chunk_t;
+
+#define HEADER_SIZE sizeof(chunk_t)
 
 static chunk_t *head = NULL;
 
-#define HEADER_SIZE sizeof(chunk_t)
-#define NEW_CHUNK_MULTIPLIER 2
-
 #define GET_CHUNK_DATA(c) offset(c, HEADER_SIZE)
-#define get_chunk(ptr) offset(ptr, (-HEADER_SIZE))
+#define GET_CHUNK(ptr) offset(ptr, (-HEADER_SIZE))
 
-static chunk_t* new_chunk(size_t n) {
+chunk_t* new_chunk(size_t n) {
         chunk_t *c = request_os_mem(n);
         if (!c) return NULL;
         *c = (chunk_t){
@@ -48,7 +54,7 @@ static chunk_t* new_chunk(size_t n) {
         if (c->next) \
         c->next->prev = c; } \
 
-static chunk_t* merge_adjacent(chunk_t *l) {
+chunk_t* merge_adjacent(chunk_t *l) {
         chunk_t *curr = l;
 
         while (curr && curr->next) {
@@ -71,54 +77,7 @@ static chunk_t* merge_adjacent(chunk_t *l) {
 
 #undef __merge_chunks
 
-/* ==================================================== */
-
-/* ======== SYNCRONIZATION =========== */
-
-static mtx_t MEMALLOC_LOCK;
-
-#define TRANSACTION(body) { \
-        mtx_lock(&MEMALLOC_LOCK); \
-        body; \
-        mtx_unlock(&MEMALLOC_LOCK); }
-
-/* =================================== */
-
-/* =============  Memory alignment  =======================*/
-
-#define ALIGN_SIZE sizeof(max_align_t)
-#define ALIGN(n) (((n) + (ALIGN_SIZE-1)) & ~(ALIGN_SIZE-1))
-
-/* ======================================================== */
-
-static int __init(void) {
-        mtx_init(&MEMALLOC_LOCK, mtx_plain);
-        head = new_chunk((1024 * 1024) + HEADER_SIZE);
-        return head != NULL;
-}
-
-/* =================== MEMALLOC ================================================= */
-
-static chunk_t* find_fit(size_t _n) {
-        chunk_t *chunk = head, *prev = NULL;
-        while (chunk) {
-                if (chunk->available && chunk->len >= _n)
-                        break;
-                prev = chunk;
-                chunk = chunk->next;
-        }
-        if (!chunk) {
-                chunk = new_chunk((_n + HEADER_SIZE) * NEW_CHUNK_MULTIPLIER);
-                if (!chunk)
-                        return NULL;
-                if (prev)
-                        prev->next = chunk;
-                chunk->prev = prev;
-        }
-        return chunk;
-}
-
-static void* get_ptr_from_chunk(chunk_t *t, size_t _n) {
+void* get_ptr_from_chunk(chunk_t *t, size_t _n) {
         if (!t) return NULL;
         if (t->len > (_n + _n / 4)) {
                 size_t rem_len = t->len - _n - HEADER_SIZE;
@@ -135,13 +94,52 @@ static void* get_ptr_from_chunk(chunk_t *t, size_t _n) {
         return GET_CHUNK_DATA(t);
 }
 
+/* ================================= chunk ======================== */
+
+static mtx_t MEMALLOC_LOCK;
+
+#define TRANSACTION(body) { \
+        mtx_lock(&MEMALLOC_LOCK); \
+        body; \
+        mtx_unlock(&MEMALLOC_LOCK); }
+
+#ifdef __GNUC__
+__attribute__((constructor))
+#endif
+static int __init(void) {
+        mtx_init(&MEMALLOC_LOCK, mtx_plain);
+        head = new_chunk((1024 * 1024) + HEADER_SIZE);
+        return head != NULL;
+}
+
+static chunk_t* find_fit(size_t _n) {
+        chunk_t *chunk = head, *prev = NULL;
+        while (chunk) {
+                if (chunk->available && chunk->len >= _n)
+                        break;
+                prev = chunk;
+                chunk = chunk->next;
+        }
+        if (!chunk) {
+                chunk = new_chunk((_n + HEADER_SIZE) * MEMALLOC_NEW_CHUNK_MULTIPLIER);
+                if (!chunk)
+                        return NULL;
+                if (prev)
+                        prev->next = chunk;
+                chunk->prev = prev;
+        }
+        return chunk;
+}
+
 void* memalloc(size_t _n) {
+#ifndef __GNUC__
         static atomic_bool __is_init = false;
         if (!__is_init) {
                 if (!__init())
                         return NULL;
                 __is_init = true;
         }
+#endif
         _n = ALIGN(_n);
         void *ptr;
 
@@ -152,7 +150,8 @@ TRANSACTION (
         else
                 ptr = get_ptr_from_chunk(c, _n);
 )
-
+        if (ptr)
+                n_mallocs++;
         return ptr;
 }
 
@@ -173,7 +172,7 @@ void* memrealloc(void *ptr, size_t _n) {
                 memfree(ptr);
                 return NULL;
         }
-        chunk_t *c = get_chunk(ptr);
+        chunk_t *c = GET_CHUNK(ptr);
         size_t prev_len = c->len;
 
 TRANSACTION (
@@ -200,15 +199,15 @@ void* memreallocarray(void *ptr, size_t _nmemb, size_t _elem_size) {
         return memrealloc(ptr, _nmemb * _elem_size);
 }
 
-/* ============================================================================= */
-
-/* =================== MEMFREE ================================================= */
-
 void memfree(void *ptr) {
 TRANSACTION(
-        chunk_t *c = get_chunk(ptr);
+        chunk_t *c = GET_CHUNK(ptr);
         c->available = 1;
         merge_adjacent(c);
 )
+        n_frees++;
 }
-/* ============================================================================= */
+
+size_t memalloc_get_n_mallocs(void) { return n_mallocs; }
+size_t memalloc_get_n_frees(void) { return n_frees; }
+size_t memalloc_get_currently_allocated_ptrs(void) { return n_mallocs - n_frees; }

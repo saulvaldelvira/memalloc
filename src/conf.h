@@ -1,0 +1,12 @@
+#ifndef __MEMALLOC_CONFIG_H__
+#define __MEMALLOC_CONFIG_H__
+
+#ifndef MEMALLOC_PADDING
+#define MEMALLOC_PADDING 16
+#endif
+
+#ifndef MEMALLOC_NEW_CHUNK_MULTIPLIER
+#define MEMALLOC_NEW_CHUNK_MULTIPLIER 2
+#endif
+
+#endif /* __MEMALLOC_CONFIG_H__ */

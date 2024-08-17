@@ -1,7 +1,7 @@
-.PHONY: clean install uninstall init
+.PHONY: clean install uninstall init test
 
 CFLAGS += -Wall -Wextra -pedantic -Wstrict-prototypes -ggdb \
-		  -I./include $(FLAGS)
+		  -I./include -fPIC $(FLAGS)
 
 PROFILE := debug
 
@@ -14,13 +14,15 @@ TARGET_PLATFORM := unix
 CFILES=  $(wildcard src/*.c) src/os/$(TARGET_PLATFORM).c
 OFILES= $(patsubst %.c,%.o,$(CFILES))
 
-default: libmemalloc.so
+default: memalloc
 
-libmemalloc.so: $(OFILES)
+memalloc: bin/libmemalloc.so
+
+bin/libmemalloc.so: $(OFILES) | bin/
 	@ echo " => libmemalloc.so"
-	@ $(CC) $(CCFLAGS) -shared -o ./libmemalloc.so $(OFILES)
-	@ echo " => libmemalloc-static.a"
-	@ ar rcs libmemalloc-static.a $(OFILES)
+	@ $(CC) $(CCFLAGS) -shared -o ./bin/libmemalloc.so $(OFILES)
+	@ echo " => libmemalloc.a"
+	@ ar rcs bin/libmemalloc.a $(OFILES)
 
 .c.o:
 	@ echo " CC $@"
@@ -30,10 +32,10 @@ INSTALL_PATH ?= /usr/local
 
 install: default
 	@ echo "libmemalloc.so => $(INSTALL_PATH)/lib"
-	@ echo "libmemalloc-static.a => $(INSTALL_PATH)/lib"
+	@ echo "libmemalloc.a => $(INSTALL_PATH)/lib"
 	@ install -d $(INSTALL_PATH)/lib
-	@ install -m  644 libmemalloc* $(INSTALL_PATH)/lib
-	@ echo "include/memalloc.h => $(INSTALL_PATH)/include"
+	@ install -m  644 bin/libmemalloc* $(INSTALL_PATH)/lib
+	@ echo "memalloc.h => $(INSTALL_PATH)/include"
 	@ install -d $(INSTALL_PATH)/include
 	@ install -m  644 include/memalloc.h $(INSTALL_PATH)/include
 
@@ -45,5 +47,14 @@ init:
 		"CompileFlags: \n" \
 		"Add: [ -I$(shell pwd)/include/ , -xc ]" > .clangd
 
+TESTFILES = $(wildcard tests/*.c)
+test: default
+	@ $(foreach T,$(TESTFILES), \
+	  $(CC) $(CCFLAGS) -o bin/$(patsubst %.c,%.out, $(notdir $(T))) $(T) -Lbin -lmemalloc ; \
+	  LD_LIBRARY_PATH=bin bin/$(patsubst %.c,%.out, $(notdir $(T))) || exit 1;)
+
+%/:
+	@ mkdir $@
+
 clean:
-	@ rm -f libmemalloc* $(OFILES)
+	@ rm -rf libmemalloc* $(OFILES) bin
