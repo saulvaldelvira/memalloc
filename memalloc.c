@@ -2,13 +2,20 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 #include <threads.h>
 #include <time.h>
 #include "os.h"
 #include "debug.h"
+#include "memalloc.h"
+#include <limits.h>
 
-/* ============ CHUNK =============== */
 typedef unsigned char u8;
+#define offset(ptr, bytes) ((void*)((u8*)(ptr) + bytes))
+
+#define would_overflow(a,b) (a > SIZE_MAX / b)
+
+/* =================== CHUNK ========================== */
 
 typedef struct chunk {
         size_t len;
@@ -21,6 +28,9 @@ static chunk_t *head = NULL;
 #define HEADER_SIZE sizeof(chunk_t)
 #define NEW_CHUNK_MULTIPLIER 2
 
+#define GET_CHUNK_DATA(c) offset(c, HEADER_SIZE)
+#define get_chunk(ptr) offset(ptr, (-HEADER_SIZE))
+
 static chunk_t* new_chunk(size_t n) {
         chunk_t *c = request_os_mem(n);
         if (!c) return NULL;
@@ -32,14 +42,44 @@ static chunk_t* new_chunk(size_t n) {
         return c;
 }
 
-/* =================================== */
+#define __merge_chunks(c,r) { \
+        c->len += r->len + HEADER_SIZE; \
+        c->next = r->next; \
+        if (c->next) \
+        c->next->prev = c; } \
+
+static chunk_t* merge_adjacent(chunk_t *l) {
+        chunk_t *curr = l;
+
+        while (curr && curr->next) {
+                if (!curr->next->available)
+                        break;
+                __merge_chunks(curr, curr->next);
+                curr = curr->next;
+        }
+        curr = l;
+        chunk_t *prev = curr;
+        while (curr && curr->prev) {
+                if (!curr->prev->available)
+                        break;
+                __merge_chunks(curr->prev, curr);
+                prev = curr;
+                curr = curr->prev;
+        }
+        return prev;
+}
+
+#undef __merge_chunks
+
+/* ==================================================== */
 
 /* ======== SYNCRONIZATION =========== */
+
 static mtx_t MEMALLOC_LOCK;
 
 #define TRANSACTION(body) { \
         mtx_lock(&MEMALLOC_LOCK); \
-        body \
+        body; \
         mtx_unlock(&MEMALLOC_LOCK); }
 
 /* =================================== */
@@ -82,16 +122,17 @@ static void* get_ptr_from_chunk(chunk_t *t, size_t _n) {
         if (!t) return NULL;
         if (t->len > (_n + _n / 4)) {
                 size_t rem_len = t->len - _n - HEADER_SIZE;
-                chunk_t *remaining = (chunk_t*)((uintptr_t)t + HEADER_SIZE + _n);
+                chunk_t *remaining = offset(t, HEADER_SIZE + _n);
                 *remaining = (chunk_t) {
                         .len = rem_len,
                         .prev = t,
                         .available = 1,
                 };
                 t->next = remaining;
+                t->len = _n;
         }
         t->available = 0;
-        return (void*)((uintptr_t)t + HEADER_SIZE);
+        return GET_CHUNK_DATA(t);
 }
 
 void* memalloc(size_t _n) {
@@ -115,27 +156,59 @@ TRANSACTION (
         return ptr;
 }
 
+void* memcalloc(size_t _nmemb, size_t _elem_size) {
+        if (would_overflow(_nmemb, _elem_size))
+                return NULL;
+        void *ptr;
+        TRANSACTION( ptr = memalloc(_nmemb * _elem_size) );
+        if (ptr)
+                memset(ptr, 0, _nmemb * _elem_size);
+        return ptr;
+}
+
+void* memrealloc(void *ptr, size_t _n) {
+        if (!ptr)
+                return memalloc(_n);
+        if (_n == 0) {
+                memfree(ptr);
+                return NULL;
+        }
+        chunk_t *c = get_chunk(ptr);
+        size_t prev_len = c->len;
+
+TRANSACTION (
+        c->available = 1;
+        c = merge_adjacent(c);
+
+        chunk_t *newc;
+        if (c->len < _n)
+                newc = c;
+        else
+                newc = find_fit(_n);
+
+        void *dst = get_ptr_from_chunk(newc, _n);
+        if (dst != ptr)
+                memmove(dst, ptr, prev_len);
+        ptr = dst;
+)
+        return ptr;
+}
+
+void* memreallocarray(void *ptr, size_t _nmemb, size_t _elem_size) {
+        if (would_overflow(_nmemb, _elem_size))
+                return NULL;
+        return memrealloc(ptr, _nmemb * _elem_size);
+}
+
 /* ============================================================================= */
 
 /* =================== MEMFREE ================================================= */
 
-chunk_t* try_merge(chunk_t *l, chunk_t *r) {
-        if (!l || !l->available)
-                return r;
-        if (!r || !r->available)
-                return l;
-        l->len += r->len + HEADER_SIZE;
-        l->next = r->next;
-        return l;
-}
-
 void memfree(void *ptr) {
 TRANSACTION(
-        chunk_t *c = (chunk_t*)((uintptr_t)ptr - HEADER_SIZE);
+        chunk_t *c = get_chunk(ptr);
         c->available = 1;
-        c = try_merge(c->prev, c);
-        try_merge(c, c->next);
+        merge_adjacent(c);
 )
 }
-
 /* ============================================================================= */
