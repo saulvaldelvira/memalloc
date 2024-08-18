@@ -42,4 +42,6 @@ size_t memalloc_get_n_mallocs(void);
 size_t memalloc_get_n_frees(void);
 size_t memalloc_get_currently_allocated_ptrs(void);
 
+void memalloc_reset(void);
+
 #endif /* __MEMALLOC_H__ */

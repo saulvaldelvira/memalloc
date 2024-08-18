@@ -103,12 +103,16 @@ static mtx_t MEMALLOC_LOCK;
         body; \
         mtx_unlock(&MEMALLOC_LOCK); }
 
+static INLINE void init_head(void) {
+        head = new_chunk((1024 * 1024) + HEADER_SIZE);
+}
+
 #ifdef __GNUC__
 __attribute__((constructor))
 #endif
 static int __init(void) {
         mtx_init(&MEMALLOC_LOCK, mtx_plain);
-        head = new_chunk((1024 * 1024) + HEADER_SIZE);
+        init_head();
         return head != NULL;
 }
 
@@ -211,3 +215,11 @@ TRANSACTION(
 size_t memalloc_get_n_mallocs(void) { return n_mallocs; }
 size_t memalloc_get_n_frees(void) { return n_frees; }
 size_t memalloc_get_currently_allocated_ptrs(void) { return n_mallocs - n_frees; }
+
+void memalloc_reset(void) {
+TRANSACTION (
+        reset_os_mem();
+        init_head();
+        n_mallocs = n_frees = 0;
+)
+}

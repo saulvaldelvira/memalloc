@@ -9,4 +9,6 @@
  */
 void* request_os_mem(size_t _n);
 
+void reset_os_mem(void);
+
 #endif /* __OS_H__ */

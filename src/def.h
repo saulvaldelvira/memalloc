@@ -21,4 +21,10 @@ typedef unsigned char u8;
 
 #define offset(ptr, bytes) ((void*)((u8*)(ptr) + bytes))
 
+#ifdef __GNUC__
+#define INLINE inline __attribute__((always_inline))
+#else
+#define INLINE inline
+#endif
+
 #endif /* __DEF_H__ */
