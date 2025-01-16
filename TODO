@@ -1,0 +1,13 @@
+Different algorithms for finding chunks
+=======================================
+Currently we use a first-fit approach, but it would
+be nice to have a best-fit option.
+
+Replace MEMALLOC_NEW_CHUNK_MULTIPLIER
+=====================================
+Currently, when we allocate a new chunk for a malloc call of n bytes, we
+multiply by MEMALLOC_NEW_CHUNK_MULTIPLIER.
+This is not very nice. It's best to have a function that calculates how many
+extra bytes we have to allocate for future calls.
+
+
