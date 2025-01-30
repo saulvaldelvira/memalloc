@@ -107,7 +107,7 @@ static INLINE void init_head(void) {
         head = new_chunk((1024 * 1024) + HEADER_SIZE);
 }
 
-#ifdef __GNUC__
+#if __has_attribute(constructor)
 __attribute__((constructor))
 #endif
 static int __init(void) {
@@ -136,7 +136,7 @@ static chunk_t* find_fit(size_t _n) {
 }
 
 void* memalloc(size_t _n) {
-#ifndef __GNUC__
+#if !__has_attribute(constructor)
         static atomic_bool __is_init = false;
         if (!__is_init) {
                 if (!__init())
