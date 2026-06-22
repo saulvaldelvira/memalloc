@@ -33,7 +33,6 @@ void* memcalloc(size_t _nmemb, size_t _elem_size);
  * Returns the address of the new region, which may
  * or may not start at the same address.
  */
-__attr_malloc__
 void* memrealloc(void *ptr, size_t _n);
 
 /*
@@ -41,7 +40,6 @@ void* memrealloc(void *ptr, size_t _n);
  * _nmemb elements of _elem_size bytes.
  * If the multiplication of _nmemb and _elem_size overflows, return NULL
  */
-__attr_malloc__
 void* memreallocarray(void *ptr, size_t _nmemb, size_t _elem_size);
 
 /*
