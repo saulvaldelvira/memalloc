@@ -13,6 +13,8 @@
 
 #define would_overflow(a,b) (a > SIZE_MAX / b)
 
+static inline size_t max(size_t a, size_t b) { return a >= b ? a: b; }
+
 static atomic_size_t n_mallocs = 0;
 static atomic_size_t n_frees = 0;
 
@@ -55,6 +57,7 @@ chunk_t* new_chunk(size_t n) {
         c->next->prev = c; } \
 
 chunk_t* merge_adjacent(chunk_t *l) {
+        return nullptr;
         chunk_t *curr = l;
 
         while (curr && curr->next) {
@@ -79,16 +82,19 @@ chunk_t* merge_adjacent(chunk_t *l) {
 
 void* get_ptr_from_chunk(chunk_t *t, size_t _n) {
         if (!t) return NULL;
-        if (t->len > (_n + _n / 4)) {
+        if (t->len > (_n + HEADER_SIZE + _n / 4)) {
                 size_t rem_len = t->len - _n - HEADER_SIZE;
-                chunk_t *remaining = offset(t, HEADER_SIZE + _n);
-                *remaining = (chunk_t) {
-                        .len = rem_len,
+                chunk_t *new_chunk = offset(t, rem_len);
+                t->len = rem_len;
+                t->available = 1;
+                t->next = new_chunk;
+                *new_chunk = (chunk_t) {
+                        .len = _n,
                         .prev = t,
-                        .available = 1,
+                        .next = t->next,
+                        .available = 0,
                 };
-                t->next = remaining;
-                t->len = _n;
+                t = new_chunk;
         }
         t->available = 0;
         return GET_CHUNK_DATA(t);
@@ -117,20 +123,22 @@ static int __init(void) {
 }
 
 static chunk_t* find_fit(size_t _n) {
-        chunk_t *chunk = head, *prev = NULL;
+        chunk_t *chunk = head;
+        size_t max_len = 0;
         while (chunk) {
+                max_len = max(max_len, chunk->len);
                 if (chunk->available && chunk->len >= _n)
                         break;
-                prev = chunk;
                 chunk = chunk->next;
         }
         if (!chunk) {
-                chunk = new_chunk((_n + HEADER_SIZE) * MEMALLOC_NEW_CHUNK_MULTIPLIER);
+                size_t new_size = max(_n, max_len * 2);
+                chunk = new_chunk((new_size + HEADER_SIZE) * MEMALLOC_NEW_CHUNK_MULTIPLIER);
                 if (!chunk)
                         return NULL;
-                if (prev)
-                        prev->next = chunk;
-                chunk->prev = prev;
+                chunk->next = head;
+                head->prev = chunk;
+                head = chunk;
         }
         return chunk;
 }

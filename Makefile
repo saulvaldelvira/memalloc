@@ -5,7 +5,9 @@ CFLAGS += -Wall -Wextra -pedantic -Wstrict-prototypes -ggdb \
 
 PROFILE := debug
 
-ifeq ($(PROFILE),release)
+ifeq ($(PROFILE),debug)
+	CFLAGS += -DMEMALLOC_DEBUG=1
+else ifeq ($(PROFILE),release)
 	CFLAGS += -O3
 endif
 
